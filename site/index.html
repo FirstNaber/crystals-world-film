@@ -450,7 +450,9 @@ footer.foot small{grid-column:1/-1;color:var(--faint);font-size:11px;letter-spac
   function size() {
     const dpr = Math.min(devicePixelRatio || 1, 1.5);  // 1920px source: sharp up to 1.5x screens
     W = Math.round(innerWidth * dpr); H = Math.round(innerHeight * dpr);
-    cv.width = W; cv.height = H; draw(true);
+    cv.width = W; cv.height = H;
+    ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high';   // resizing a canvas resets these
+    draw(true);
   }
   function focusAt(p) {
     for (let k = 1; k < FOCUS.length; k++) if (p <= FOCUS[k][0]) {
