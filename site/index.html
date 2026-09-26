@@ -365,7 +365,7 @@ footer.foot small{grid-column:1/-1;color:var(--faint);font-size:11px;letter-spac
 (() => {
   'use strict';
   /* ─── config ─── */
-  const FRAME_COUNT = 451;                 // 15s film at 30fps, 1280px wide
+  const FRAME_COUNT = 361;                 // every native frame of the 15s film, full 1920×1080
   const frameURL = (i) => `frames/d/${String(i + 1).padStart(4, '0')}.jpg`;
   const CHAPTERS = [                        // film progress where each chapter begins
     { at: 0.00, num: 'I',   name: 'Amethyst' },
@@ -389,8 +389,11 @@ footer.foot small{grid-column:1/-1;color:var(--faint);font-size:11px;letter-spac
   const rNum = document.querySelector('#readout .num'), rName = document.querySelector('#readout .name'), rBar = document.querySelector('#readout .track i');
   const header = document.querySelector('header.top');
 
-  /* ─── frame loading: capped pump, opening run first ─── */
-  const images = new Array(FRAME_COUNT);
+  /* ─── frame loading ───
+     Frames are kept as compressed JPEG blobs (~70KB each, ~25MB total), never as decoded images:
+     decoded 1920×1080 frames are ~8MB each and holding hundreds of them crashes mobile Safari.
+     Only a small window around the playhead is decoded to ImageBitmaps, a few at a time. */
+  const blobs = new Array(FRAME_COUNT);
   let loaded = 0;
   const bar = document.querySelector('#loader .bar i');
   let order = [...Array(FRAME_COUNT).keys()];
@@ -402,44 +405,50 @@ footer.foot small{grid-column:1/-1;color:var(--faint);font-size:11px;letter-spac
   }
   let cursor = 0, inflight = 0;
   function pump() {
-    while (inflight < 10 && cursor < order.length) {
+    while (inflight < 8 && cursor < order.length) {
       const i = order[cursor++]; inflight++;
-      const im = new Image(); im.decoding = 'async'; im.src = frameURL(i);
-      im.onload = () => { images[i] = im; loaded++; inflight--; bar.style.width = `${Math.min(100, (loaded / 60) * 100)}%`; if (loaded === 60) boot(); if (i === displayed) draw(true); pump(); };
-      im.onerror = () => { inflight--; pump(); };
+      fetch(frameURL(i)).then((r) => (r.ok ? r.blob() : null)).then((bl) => {
+        inflight--;
+        if (bl) { blobs[i] = bl; loaded++; bar.style.width = `${Math.min(100, (loaded / 48) * 100)}%`; if (loaded === 48) boot(); bmpCenter = -999; }
+        pump();
+      }).catch(() => { inflight--; pump(); });
     }
   }
 
-  /* ─── ImageBitmap sliding window (decode off the main thread) ─── */
+  /* ─── ImageBitmap sliding window, nearest-first, max 4 decodes at once ─── */
   const bitmaps = new Map(), decoding = new Set();
-  const AHEAD = 60, KEEP = 45; let bmpCenter = -999;   // ~2s ahead / 1.5s behind at 30fps
+  const AHEAD = 30, KEEP = 18, MAXDEC = 4; let bmpCenter = -999;
   function ensureBitmaps(center) {
-    if (Math.abs(center - bmpCenter) < 3) return;
-    bmpCenter = center;
     const lo = Math.max(0, center - KEEP), hi = Math.min(FRAME_COUNT - 1, center + AHEAD);
-    for (let i = lo; i <= hi; i++) {
-      if (bitmaps.has(i) || decoding.has(i) || !images[i] || !window.createImageBitmap) continue;
-      decoding.add(i);
-      createImageBitmap(images[i]).then((b) => {
-        decoding.delete(i);
-        if (i < bmpCenter - KEEP - 10 || i > bmpCenter + AHEAD + 10) { b.close(); return; }
-        bitmaps.set(i, b); if (i === displayed) draw(true);
-      }).catch(() => decoding.delete(i));
+    // release everything outside the window first, so memory stays bounded however fast you scroll
+    for (const k of [...bitmaps.keys()]) if (k < lo || k > hi) { bitmaps.get(k).close(); bitmaps.delete(k); }
+    if (decoding.size >= MAXDEC) return;
+    for (let d = 0; d <= Math.max(AHEAD, KEEP) && decoding.size < MAXDEC; d++) {
+      for (const i of d ? [center + d, center - d] : [center]) {
+        if (i < lo || i > hi || bitmaps.has(i) || decoding.has(i) || !blobs[i]) continue;
+        decoding.add(i);
+        createImageBitmap(blobs[i]).then((bm) => {
+          decoding.delete(i);
+          const c = Math.round(current);
+          if (i < c - KEEP || i > c + AHEAD) { bm.close(); return; }
+          bitmaps.set(i, bm); if (Math.abs(i - c) <= 1) draw(true);
+        }).catch(() => decoding.delete(i));
+        if (decoding.size >= MAXDEC) break;
+      }
     }
-    for (const k of [...bitmaps.keys()]) if (k < center - KEEP - 10 || k > center + AHEAD + 10) { bitmaps.get(k).close(); bitmaps.delete(k); }
   }
   function nearest(i) {
-    for (let d = 0; d < FRAME_COUNT; d++) {
-      if (bitmaps.has(i - d)) return bitmaps.get(i - d); if (bitmaps.has(i + d)) return bitmaps.get(i + d);
-      if (images[i - d]) return images[i - d]; if (images[i + d]) return images[i + d];
+    for (let d = 0; d <= AHEAD + KEEP; d++) {
+      if (bitmaps.has(i - d)) return bitmaps.get(i - d);
+      if (bitmaps.has(i + d)) return bitmaps.get(i + d);
     }
-    return null;
+    return null;                           // nothing decoded nearby yet: keep the last drawn frame
   }
 
   /* ─── canvas ─── */
   let W = 0, H = 0;
   function size() {
-    const dpr = Math.min(devicePixelRatio || 1, 1);    // match the 1280px source; more DPR only upscales
+    const dpr = Math.min(devicePixelRatio || 1, 1.5);  // 1920px source: sharp up to 1.5x screens
     W = Math.round(innerWidth * dpr); H = Math.round(innerHeight * dpr);
     cv.width = W; cv.height = H; draw(true);
   }
@@ -527,7 +536,7 @@ footer.foot small{grid-column:1/-1;color:var(--faint);font-size:11px;letter-spac
     requestAnimationFrame(tick);
     document.getElementById('loader').classList.add('done');
     // give the first bitmaps a moment, then signal the verification harness
-    setTimeout(() => { draw(true); window.__ready = true; }, JUMP !== null ? 900 : 300);
+    setTimeout(() => { draw(true); window.__ready = true; }, JUMP !== null ? 1200 : 400);
   }
   pump();
 })();
