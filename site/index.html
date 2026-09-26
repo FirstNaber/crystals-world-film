@@ -366,7 +366,7 @@ footer.foot small{grid-column:1/-1;color:var(--faint);font-size:11px;letter-spac
   'use strict';
   /* ─── config ─── */
   const FRAME_COUNT = 361;                 // every native frame of the 15s film, full 1920×1080
-  const frameURL = (i) => `frames/d/${String(i + 1).padStart(4, '0')}.jpg`;
+  const frameURL = (i) => `frames/d/${String(i + 1).padStart(4, "0")}.jpg?v=2`;
   const CHAPTERS = [                        // film progress where each chapter begins
     { at: 0.00, num: 'I',   name: 'Amethyst' },
     { at: 0.36, num: 'II',  name: 'Quartz' },
